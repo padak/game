@@ -1,8 +1,8 @@
 <template>
   <div class="number-bank">
     <div 
-      v-for="num in gameStore.availableNumbers"
-      :key="num"
+      v-for="(num, index) in gameStore.availableNumbers"
+      :key="`num-${num}-${index}`"
       class="number"
       :class="{ 'selected': gameStore.selectedNumber === num }"
       @click="gameStore.selectNumber(num)"
