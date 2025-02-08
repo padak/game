@@ -1,0 +1,9 @@
+# Cursor Rules
+
+# 0. Respect docs/production_design.md as a master document describing our goal.
+# 1. Check the progress in the docs/activity_plan.md and once we finish some phase/tasks, mark it done in the activity plan
+# 2. When the user repeats instructions, add those repeated points to this file to avoid redundancy and improve communication clarity.
+# 3. Always check previous communication for repeated details before asking for new instructions.
+# 4. Automatically incorporate repeated points into the project documentation to be consistent and efficient.
+
+# These rules help ensure that the development process is as efficient and clear as possible.
