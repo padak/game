@@ -17,30 +17,32 @@
           :key="colIndex"
           class="cell"
           :class="{
-            'operator': cell?.isOperator,
-            'fixed': cell?.isFixed,
-            'result': cell?.isResult,
-            'correct': cell?.isCorrect,
-            'incorrect': cell?.isIncorrect,
-            'selected': isSelected(rowIndex, colIndex),
-            'empty': cell?.isEmpty
+            'is-operator': cell.isOperator,
+            'is-result': cell.isResult,
+            'is-fixed': cell.isFixed,
+            'is-empty': cell.isEmpty,
+            'is-correct': cell.isCorrect,
+            'is-incorrect': cell.isIncorrect,
+            'equation-cell': cell.inEquation,
+            'interactive': !cell.isOperator && !cell.isFixed && cell.inEquation,
+            'selected': isSelected(rowIndex, colIndex)
           }"
           @click="handleCellClick(rowIndex, colIndex)"
         >
-          <template v-if="cell?.isOperator">
-            {{ cell.operator }}
-          </template>
-          <template v-else>
-            {{ cell?.value || cell?.operator || '' }}
-          </template>
+          {{ cell.isOperator ? cell.operator : cell.value }}
         </div>
       </div>
     </div>
 
     <div class="controls">
-      <button @click="() => gameStore.initializeGame('easy')">Easy</button>
-      <button @click="() => gameStore.initializeGame('medium')">Medium</button>
-      <button @click="() => gameStore.initializeGame('hard')">Hard</button>
+      <button 
+        v-for="level in ['easy', 'medium', 'hard'] as const" 
+        :key="level"
+        :class="{ active: gameStore.difficulty === level }"
+        @click="gameStore.initializeGame(level)"
+      >
+        {{ level.toUpperCase() }}
+      </button>
     </div>
   </div>
 </template>
@@ -81,6 +83,7 @@ function isSelected(row: number, col: number): boolean {
   flex-direction: column;
   align-items: center;
   gap: 1rem;
+  padding: 2rem;
 }
 
 .loading-overlay {
@@ -132,6 +135,7 @@ function isSelected(row: number, col: number): boolean {
   padding: 1rem;
   background: #f0f0f0;
   border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .grid.loading {
@@ -153,73 +157,85 @@ function isSelected(row: number, col: number): boolean {
   background: white;
   border: 1px solid #ddd;
   font-size: 1.2rem;
-  cursor: pointer;
   user-select: none;
+  transition: all 0.2s ease;
 }
 
-.cell:hover {
-  background: #f0f0f0;
+.cell.equation-cell {
+  border: 2px solid #1976d2;
 }
 
-.cell.operator {
-  background: #e0e0e0;
+.cell.interactive {
+  cursor: pointer;
+}
+
+.cell.interactive:hover {
+  background: #f5f5f5;
+  transform: scale(1.05);
+}
+
+.cell.is-operator {
+  background: #e3f2fd;
   font-weight: bold;
+  color: #1976d2;
 }
 
-.cell.result {
-  background: #e8f0fe;
-}
-
-.cell.fixed {
-  color: #2c3e50;
-  font-weight: bold;
-}
-
-.cell.correct {
+.cell.is-result {
   background: #e8f5e9;
   color: #2e7d32;
 }
 
-.cell.correct.operator {
-  background: #c8e6c9;
+.cell.is-fixed {
+  background: #f5f5f5;
+  color: #424242;
+  font-weight: bold;
 }
 
-.cell.incorrect {
+.cell.is-empty {
+  color: #9e9e9e;
+}
+
+.cell.is-correct {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.cell.is-incorrect {
   background: #ffebee;
   color: #c62828;
 }
 
-.cell.incorrect.operator {
-  background: #ffcdd2;
-}
-
 .cell.selected {
-  border-color: #1a73e8;
-  border-width: 2px;
-}
-
-.cell.empty {
-  background: #fff3cd;  /* Light yellow background for empty cells */
-  cursor: pointer;
+  transform: scale(1.05);
+  box-shadow: 0 0 0 2px #1976d2;
 }
 
 .controls {
   display: flex;
   gap: 1rem;
+  margin-top: 2rem;
 }
 
 .controls button {
   padding: 0.5rem 1rem;
-  border: 1px solid #1a73e8;
+  border: 2px solid #1a73e8;
   border-radius: 4px;
   background: white;
   color: #1a73e8;
   cursor: pointer;
   transition: all 0.2s;
+  text-transform: capitalize;
+  font-weight: bold;
 }
 
 .controls button:hover {
   background: #e8f0fe;
+  transform: translateY(-2px);
+}
+
+.controls button.active {
+  background: #1a73e8;
+  color: white;
 }
 
 @keyframes spin {

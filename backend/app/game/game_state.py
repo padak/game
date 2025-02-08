@@ -7,6 +7,7 @@ from typing import Dict, Optional, List
 from dataclasses import dataclass
 import uuid
 import time
+import logging
 
 @dataclass
 class Move:
@@ -27,8 +28,11 @@ class GameState:
 
     def validate_move(self, move: Move) -> Dict:
         """Validate a move and update game state if valid."""
+        logging.info(f"Validating move: row={move.row}, col={move.col}, value={move.value}")
+        
         # Check if position is valid
         if not (0 <= move.row < len(self.grid) and 0 <= move.col < len(self.grid[0])):
+            logging.error("Invalid position")
             return {
                 'valid': False,
                 'error': 'Invalid position'
@@ -36,23 +40,30 @@ class GameState:
 
         # Check if cell exists and is available
         cell = self.grid[move.row][move.col]
-        if cell is None:
-            # Initialize empty cell if needed
-            cell = {
-                'value': None,
-                'isOperator': False,
-                'isFixed': False,
-                'isResult': False
+        if not cell:
+            logging.error("Cell does not exist")
+            return {
+                'valid': False,
+                'error': 'Cell does not exist'
             }
-            self.grid[move.row][move.col] = cell
-        elif cell.get('isOperator') or cell.get('isFixed', False):
+        
+        if cell.get('isOperator') or cell.get('isFixed', False):
+            logging.error("Cell is not available for moves")
             return {
                 'valid': False,
                 'error': 'Cell is not available for moves'
             }
+        
+        if not cell.get('inEquation', False):
+            logging.error("Cell is not part of an equation")
+            return {
+                'valid': False,
+                'error': 'Cell is not part of an equation'
+            }
 
         # Check if number is in number bank
         if move.value not in self.number_bank:
+            logging.error("Number is not available in number bank")
             return {
                 'valid': False,
                 'error': 'Number is not available in number bank'
@@ -60,12 +71,16 @@ class GameState:
 
         # Apply the move
         cell['value'] = move.value
+        cell['isEmpty'] = False
         self.number_bank.remove(move.value)
         self.moves.append(move)
         self.last_activity = time.time()
 
         # Validate affected equations
         affected_equations = self._validate_equations(move)
+        
+        # Log validation results
+        logging.info(f"Move validation successful. Affected equations: {affected_equations}")
 
         return {
             'valid': True,
@@ -76,15 +91,26 @@ class GameState:
 
     def clear_cell(self, row: int, col: int) -> Dict:
         """Clear a cell and return its value to the number bank."""
+        logging.info(f"Clearing cell: row={row}, col={col}")
+        
         # Check if position is valid
         if not (0 <= row < len(self.grid) and 0 <= col < len(self.grid[0])):
+            logging.error("Invalid position")
             return {
                 'valid': False,
                 'error': 'Invalid position'
             }
 
         cell = self.grid[row][col]
-        if cell is None or cell.get('isOperator') or cell.get('isFixed', False):
+        if not cell:
+            logging.error("Cell does not exist")
+            return {
+                'valid': False,
+                'error': 'Cell does not exist'
+            }
+        
+        if cell.get('isOperator') or cell.get('isFixed', False):
+            logging.error("Cell cannot be cleared")
             return {
                 'valid': False,
                 'error': 'Cell cannot be cleared'
@@ -93,12 +119,17 @@ class GameState:
         value = cell.get('value')
         if value is not None:
             cell['value'] = None
+            cell['isEmpty'] = True
+            cell['isCorrect'] = False
+            cell['isIncorrect'] = False
             self.number_bank.append(value)
             self.number_bank.sort()  # Keep bank sorted
             self.last_activity = time.time()
 
             # Validate affected equations
             affected_equations = self._validate_equations(Move(row, col, None))
+            
+            logging.info(f"Cell cleared successfully. Value {value} returned to number bank")
 
             return {
                 'valid': True,
@@ -107,6 +138,7 @@ class GameState:
                 'affectedEquations': affected_equations
             }
 
+        logging.error("Cell is already empty")
         return {
             'valid': False,
             'error': 'Cell is already empty'
@@ -139,7 +171,7 @@ class GameState:
             row = start_row + (i if orientation == 'vertical' else 0)
             col = start_col + (i if orientation == 'horizontal' else 0)
             cell = self.grid[row][col]
-            if cell is None:
+            if not cell or not cell.get('inEquation', False):
                 return None
             cells.append(cell)
 
@@ -154,7 +186,7 @@ class GameState:
         equals = cells[3].get('operator')
         result = cells[4].get('value')
 
-        if not all([num1, op, num2, equals == '=', result]):
+        if not all([num1 is not None, op, num2 is not None, equals == '=', result is not None]):
             return None
 
         # Validate equation
@@ -170,8 +202,9 @@ class GameState:
 
         # Update cell states
         for cell in cells:
-            cell['isCorrect'] = is_valid
-            cell['isIncorrect'] = not is_valid
+            if not cell.get('isOperator'):
+                cell['isCorrect'] = is_valid
+                cell['isIncorrect'] = not is_valid
 
         return {
             'start': {'row': start_row, 'col': start_col},

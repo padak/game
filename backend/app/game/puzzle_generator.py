@@ -7,6 +7,7 @@ from typing import List, Tuple, Dict, Set, Optional
 from dataclasses import dataclass
 import random
 import time
+import logging
 
 @dataclass
 class Position:
@@ -24,198 +25,361 @@ class Equation:
     cells: List[Tuple[int, int]]  # List of (row, col) for each cell in equation
 
 class PuzzleGenerator:
-    OPERATORS = ['+', '-', '*']  # Removed division to simplify
-    MAX_ATTEMPTS = 20  # Further reduced from 50
-    MAX_GENERATION_TIME = 2  # Reduced from 5 seconds
+    OPERATORS = ['+', '-', '*']
     
-    # Pre-computed valid equations for each operator
+    # Pre-computed valid equations for each operator with numbers 1-15
     VALID_EQUATIONS = {
         '+': [(a, b, a + b) for a in range(1, 10) for b in range(1, 10) if a + b <= 15],
-        '-': [(a, b, a - b) for a in range(1, 10) for b in range(1, 10) if a > b and (a - b) > 0],  # Ensure positive results
-        '*': [(a, b, a * b) for a in range(1, 6) for b in range(1, 6)]
+        '-': [(a, b, a - b) for a in range(2, 16) for b in range(1, a) if a - b <= 15],
+        '*': [(a, b, a * b) for a in range(1, 6) for b in range(1, 6) if a * b <= 15]
     }
 
-    def __init__(self, grid_size: int = 8):
+    def __init__(self, grid_size: int = 11):  # Increased to 11x11
         self.grid_size = grid_size
-        self.used_cells: Set[Tuple[int, int]] = set()
+        self.grid: List[List[Optional[Dict]]] = []
         self.equations: List[Equation] = []
-        self.grid: List[List[Optional[Dict]]] = [
-            [None for _ in range(grid_size)] for _ in range(grid_size)
-        ]
-        self.cell_equations: Dict[Tuple[int, int], List[Equation]] = {}
-        self.start_time = 0
-        self._current_difficulty = 'medium'  # Default difficulty
-        self.number_usage: Dict[int, int] = {}  # Track how many times each number is needed
+        self.empty_cells: Set[Tuple[int, int]] = set()
+        self.intersection_points: Set[Tuple[int, int]] = set()
+        self._used_cells: Set[Tuple[int, int]] = set()
+
+    @property
+    def used_cells(self) -> Set[Tuple[int, int]]:
+        """Return the set of used cells in the grid."""
+        if not self._used_cells:
+            self._used_cells = set()
+            for row in range(self.grid_size):
+                for col in range(self.grid_size):
+                    if self.grid[row][col] and self.grid[row][col].get('inEquation', False):
+                        self._used_cells.add((row, col))
+        return self._used_cells
 
     def generate_puzzle(self, difficulty: str) -> Dict:
         """Generate a complete puzzle based on difficulty level."""
-        self.start_time = time.time()
-        self._current_difficulty = difficulty  # Store current difficulty
-        self._reset()
-        eq_count = self._get_equation_count(difficulty)
+        logging.info(f"\n{'='*20}\nStarting puzzle generation with difficulty: {difficulty}\n{'='*20}")
         
-        # Generate and place equations
-        equations_placed = 0
-        attempts = 0
-        max_total_attempts = eq_count * 3  # Limit total attempts
+        # Reset state
+        self.grid = [[{
+            'value': None,
+            'isOperator': False,
+            'operator': None,
+            'isFixed': False,
+            'isResult': False,
+            'isEmpty': False,  # Initialize as not empty
+            'inEquation': False,
+            'isCorrect': False,
+            'isIncorrect': False
+        } for _ in range(self.grid_size)] for _ in range(self.grid_size)]
+        self.equations = []
+        self.empty_cells.clear()
+        self.intersection_points.clear()
+        self._used_cells.clear()
         
-        while equations_placed < eq_count and attempts < max_total_attempts:
-            if time.time() - self.start_time > self.MAX_GENERATION_TIME:
-                break
-            if self._add_equation():
-                equations_placed += 1
-            attempts += 1
-
-        # Generate number bank
-        number_bank = self._generate_number_bank()
-
+        # 1. Generate crossword pattern
+        self._generate_pattern(difficulty)
+        
+        # 2. Fill numbers
+        self._fill_numbers()
+        
+        # 3. Hide some numbers
+        number_bank = self._hide_numbers(difficulty)
+        
+        # Log the generated puzzle
+        logging.info("\n=== Generated Puzzle Details ===")
+        logging.info(f"Number of equations: {len(self.equations)}")
+        logging.info(f"Number of intersections: {len(self.intersection_points)}")
+        logging.info(f"Number of empty cells: {len(self.empty_cells)}")
+        logging.info(f"Number bank size: {len(number_bank)}")
+        
+        # Verify empty cells match number bank
+        empty_count = sum(1 for row in self.grid for cell in row if cell.get('isEmpty', False))
+        if empty_count != len(number_bank):
+            logging.error(f"Mismatch between empty cells ({empty_count}) and number bank size ({len(number_bank)})")
+            # Fix empty cells to match number bank
+            self._fix_empty_cells(number_bank)
+        
         return {
             'grid': self.grid,
             'equations': self.equations,
-            'numberBank': sorted(number_bank)
+            'numberBank': sorted(number_bank),
+            'gridSize': self.grid_size,
+            'difficulty': difficulty
         }
 
-    def _reset(self):
-        """Reset the generator state."""
-        self.used_cells.clear()
-        self.equations.clear()
-        self.cell_equations.clear()
-        self.grid = [[None for _ in range(self.grid_size)] for _ in range(self.grid_size)]
-        self._current_difficulty = 'medium'  # Default difficulty
-        self.number_usage.clear()
-
-    def _get_equation_count(self, difficulty: str) -> int:
-        """Determine number of equations based on difficulty."""
-        return {
-            'easy': 2,
-            'medium': 3,
-            'hard': 4
-        }.get(difficulty, 2)
-
-    def _add_equation(self) -> bool:
-        """Try to add a new equation to the puzzle."""
-        orientation = random.choice(['horizontal', 'vertical'])
-        operator = random.choice(self.OPERATORS)
+    def _fix_empty_cells(self, number_bank: List[int]):
+        """Fix empty cells to match number bank size."""
+        # Count current empty cells
+        empty_cells = [(r, c) for r in range(self.grid_size) 
+                      for c in range(self.grid_size) 
+                      if self.grid[r][c].get('isEmpty', False)]
         
-        # Get a valid position
-        position = self._find_valid_position(orientation)
-        if not position:
-            return False
+        # If we have too many empty cells, mark some as fixed
+        while len(empty_cells) > len(number_bank):
+            row, col = empty_cells.pop()
+            self.grid[row][col]['isEmpty'] = False
+            self.grid[row][col]['isFixed'] = True
+            if (row, col) in self.empty_cells:
+                self.empty_cells.remove((row, col))
 
-        # Get intersections
-        intersections = self._find_intersections(position)
-        if not self._try_place_equation(position, operator, intersections):
-            return False
-
-        return True
-
-    def _try_place_equation(self, position: Position, operator: str, intersections: List[Tuple[Tuple[int, int], int]]) -> bool:
-        """Try to place an equation at the given position."""
-        # Get valid equations for this operator
-        valid_equations = self.VALID_EQUATIONS[operator]
+    def _generate_pattern(self, difficulty: str) -> None:
+        """Generate the crossword pattern without numbers."""
+        max_attempts = 30  # Increased attempts for more complex patterns
         
-        # Shuffle to try random combinations
-        random.shuffle(valid_equations)
-        
-        # Track current number usage for rollback
-        current_usage = self.number_usage.copy()
-        
-        for a, b, result in valid_equations[:10]:  # Only try first 10 combinations
-            # Check if we have enough of each number
-            if not self._can_use_numbers(a, b, result):
+        for attempt in range(max_attempts):
+            logging.info(f"\nAttempt {attempt + 1}/{max_attempts} to generate pattern")
+            
+            # Reset state for this attempt
+            self.equations.clear()
+            self.intersection_points.clear()
+            self._used_cells.clear()
+            
+            # Start with a horizontal equation in the middle
+            center_row = self.grid_size // 2
+            h_pos = Position(center_row, 1, 'horizontal')
+            
+            if not self._place_first_equation(h_pos):
                 continue
                 
-            if self._validate_numbers_with_existing(position, a, b, result):
-                cells = self._get_equation_cells(position, 5)
-                equation = Equation(position, a, operator, b, result, cells)
-                if self._place_equation(equation):
-                    self.equations.append(equation)
-                    for cell in cells:
-                        if cell not in self.cell_equations:
-                            self.cell_equations[cell] = []
-                        self.cell_equations[cell].append(equation)
-                    # Update number usage
-                    self._update_number_usage(a, b, result)
-                    return True
+            # Add more equations based on difficulty
+            target_equations = {
+                'easy': 3,
+                'medium': 6,
+                'hard': 10
+            }[difficulty]
             
-            # Rollback number usage if placement failed
-            self.number_usage = current_usage
+            # Try to place additional equations
+            placed_equations = 1
+            max_placement_attempts = 50
+            
+            for _ in range(max_placement_attempts):
+                if placed_equations >= target_equations:
+                    break
+                    
+                # Alternate between horizontal and vertical equations
+                orientation = 'vertical' if len(self.equations) % 2 == 1 else 'horizontal'
                 
+                # Find valid position for new equation
+                valid_positions = []
+                for row in range(1, self.grid_size - 4):
+                    for col in range(1, self.grid_size - 4):
+                        pos = Position(row, col, orientation)
+                        cells = self._get_equation_cells(pos, 5)
+                        if self._is_valid_equation_position(cells):
+                            valid_positions.append(pos)
+                
+                if not valid_positions:
+                    continue
+                    
+                # Try each position until we find one that works
+                random.shuffle(valid_positions)
+                equation_placed = False
+                
+                for pos in valid_positions:
+                    if self._place_first_equation(pos):
+                        placed_equations += 1
+                        equation_placed = True
+                        break
+                        
+                if not equation_placed:
+                    continue
+            
+            # If we placed enough equations, we're done
+            if placed_equations >= target_equations:
+                logging.info(f"Successfully generated pattern with {placed_equations} equations")
+                break
+        else:
+            raise ValueError(f"Could not generate valid pattern for {difficulty} difficulty")
+
+    def _place_first_equation(self, pos: Position) -> bool:
+        """Place first equation with random numbers."""
+        cells = self._get_equation_cells(pos, 5)
+        if not self._is_valid_equation_position(cells):
+            logging.info(f"Invalid position for first equation at {pos}")
+            return False
+            
+        operator = random.choice(self.OPERATORS)
+        a, b, result = random.choice(self.VALID_EQUATIONS[operator])
+        
+        equation = Equation(pos, a, operator, b, result, cells)
+        self.equations.append(equation)
+        
+        # Place equation in grid
+        values = [a, operator, b, '=', result]
+        for i, (row, col) in enumerate(cells):
+            is_operator = i in [1, 3]
+            self.grid[row][col].update({
+                'value': values[i] if not is_operator else None,
+                'isOperator': is_operator,
+                'operator': values[i] if is_operator else None,
+                'isFixed': False,
+                'isResult': i == 4,
+                'isEmpty': False,
+                'inEquation': True,
+                'isCorrect': False,
+                'isIncorrect': False
+            })
+            self._used_cells.add((row, col))
+        
+        logging.info(f"Placed first equation: {a} {operator} {b} = {result}")
+        return True
+
+    def _place_second_equation(self, pos: Position, intersection_point: Tuple[int, int], intersection_value: int) -> bool:
+        """Place second equation that must use the intersection value."""
+        cells = self._get_equation_cells(pos, 5)
+        if not self._is_valid_equation_position(cells):
+            logging.info(f"Invalid position for second equation at {pos}")
+            return False
+            
+        # Find which position in the equation is the intersection point
+        intersection_idx = None
+        for i, cell in enumerate(cells):
+            if cell == intersection_point:
+                intersection_idx = i
+                break
+        
+        if intersection_idx is None or intersection_idx % 2 != 0:  # Must be a number position (0, 2, or 4)
+            logging.info(f"Invalid intersection index {intersection_idx}")
+            return False
+            
+        # Choose operator
+        operator = random.choice(self.OPERATORS)
+        
+        # Find valid equation that uses intersection_value in the correct position
+        valid_equations = self.VALID_EQUATIONS[operator]
+        random.shuffle(valid_equations)
+        
+        for a, b, result in valid_equations:
+            values = [a, b, result]
+            if values[intersection_idx // 2] == intersection_value:
+                # Found a valid equation
+                equation = Equation(pos, a, operator, b, result, cells)
+                self.equations.append(equation)
+                
+                # Place equation in grid
+                values = [a, operator, b, '=', result]
+                for i, (row, col) in enumerate(cells):
+                    if (row, col) != intersection_point:  # Skip intersection point, it's already set
+                        is_operator = i in [1, 3]
+                        self.grid[row][col].update({
+                            'value': values[i] if not is_operator else None,
+                            'isOperator': is_operator,
+                            'operator': values[i] if is_operator else None,
+                            'isFixed': False,
+                            'isResult': i == 4,
+                            'isEmpty': False,
+                            'inEquation': True,
+                            'isCorrect': False,
+                            'isIncorrect': False
+                        })
+                        self._used_cells.add((row, col))
+                logging.info(f"Placed second equation: {a} {operator} {b} = {result}")
+                return True
+        
+        logging.info(f"Could not find valid equation using {intersection_value} at position {intersection_idx}")
         return False
 
-    def _can_use_numbers(self, a: int, b: int, result: int) -> bool:
-        """Check if we have enough of each number available."""
-        numbers = [a, b, result]
-        temp_usage = self.number_usage.copy()
-        
-        for num in numbers:
-            temp_usage[num] = temp_usage.get(num, 0) + 1
-            # Limit each number to maximum 3 occurrences
-            if temp_usage[num] > 3:
-                return False
-        
-        return True
-
-    def _update_number_usage(self, a: int, b: int, result: int):
-        """Update the count of how many times each number is needed."""
-        for num in [a, b, result]:
-            self.number_usage[num] = self.number_usage.get(num, 0) + 1
-
-    def _find_valid_position(self, orientation: str) -> Optional[Position]:
-        """Find a valid position for a new equation."""
-        attempts = 0
-        max_attempts = 10  # Limit position finding attempts
-        
-        while attempts < max_attempts:
-            if orientation == 'horizontal':
-                row = random.randint(0, self.grid_size - 1)
-                col = random.randint(0, self.grid_size - 5)  # Need 5 cells for equation
-            else:
-                row = random.randint(0, self.grid_size - 5)
-                col = random.randint(0, self.grid_size - 1)
+    def _fill_numbers(self) -> None:
+        """Fill in numbers for all equations ensuring mathematical validity."""
+        # First, handle intersecting equations
+        for point in self.intersection_points:
+            # Find equations that share this point
+            shared_equations = []
+            for eq in self.equations:
+                if point in eq.cells:
+                    shared_equations.append(eq)
             
-            position = Position(row, col, orientation)
-            cells = self._get_equation_cells(position, 5)
-            
-            # Check if position is valid and doesn't create invalid adjacencies
-            if self._is_valid_equation_position(cells):
-                return position
-            
-            attempts += 1
-        return None
-
-    def _is_valid_equation_position(self, cells: List[Tuple[int, int]]) -> bool:
-        """Check if the equation position is valid and doesn't create invalid adjacencies."""
-        # Check if any cells are already used
-        if any((r, c) in self.used_cells for r, c in cells):
-            return False
+            if len(shared_equations) == 2:
+                self._fill_intersecting_equations(shared_equations[0], shared_equations[1], point)
         
-        # Check adjacent cells for each equation cell
-        for row, col in cells:
-            # Check all 8 adjacent cells
-            for dr in [-1, 0, 1]:
-                for dc in [-1, 0, 1]:
-                    if dr == 0 and dc == 0:
-                        continue
-                    
-                    adj_row, adj_col = row + dr, col + dc
-                    
-                    # Skip if outside grid
-                    if not (0 <= adj_row < self.grid_size and 0 <= adj_col < self.grid_size):
-                        continue
-                    
-                    # If adjacent cell is used, it must be part of this equation
-                    adj_pos = (adj_row, adj_col)
-                    if adj_pos in self.used_cells and adj_pos not in cells:
-                        # Allow adjacency only if one cell is an operator
-                        curr_is_op = cells.index((row, col)) % 2 == 1
-                        adj_cell = self.grid[adj_row][adj_col]
-                        adj_is_op = adj_cell and adj_cell.get('isOperator', False)
+        # Then fill remaining equations
+        for eq in self.equations:
+            if eq.a == 0:  # Not yet filled
+                self._fill_single_equation(eq)
+
+    def _fill_intersecting_equations(self, eq1: Equation, eq2: Equation, point: Tuple[int, int]) -> None:
+        """Fill numbers for two intersecting equations."""
+        # Find valid number for intersection point
+        valid_numbers = set(range(1, 10))
+        for num in valid_numbers:
+            if self._try_fill_equations_with_intersection(eq1, eq2, point, num):
+                break
+
+    def _try_fill_equations_with_intersection(self, eq1: Equation, eq2: Equation, point: Tuple[int, int], num: int) -> bool:
+        """Try to fill two equations using a specific number at intersection."""
+        # Find position of intersection in each equation
+        pos1 = eq1.cells.index(point)
+        pos2 = eq2.cells.index(point)
+        
+        # Try valid equations that use this number in the correct position
+        for a1, b1, r1 in self.VALID_EQUATIONS[eq1.operator]:
+            nums1 = [a1, b1, r1]
+            if nums1[pos1 // 2] == num:  # If number fits in correct position
+                for a2, b2, r2 in self.VALID_EQUATIONS[eq2.operator]:
+                    nums2 = [a2, b2, r2]
+                    if nums2[pos2 // 2] == num:  # If number fits in correct position
+                        # Fill equations
+                        eq1.a, eq1.b, eq1.result = a1, b1, r1
+                        eq2.a, eq2.b, eq2.result = a2, b2, r2
                         
-                        if not (curr_is_op or adj_is_op):
-                            return False
+                        # Update grid
+                        self._update_equation_in_grid(eq1)
+                        self._update_equation_in_grid(eq2)
+                        return True
+        return False
+
+    def _fill_single_equation(self, equation: Equation) -> None:
+        """Fill numbers for a single equation."""
+        valid_equations = self.VALID_EQUATIONS[equation.operator]
+        a, b, result = random.choice(valid_equations)
+        equation.a, equation.b, equation.result = a, b, result
+        self._update_equation_in_grid(equation)
+
+    def _update_equation_in_grid(self, equation: Equation) -> None:
+        """Update grid cells with equation numbers."""
+        values = [equation.a, equation.operator, equation.b, '=', equation.result]
+        for (row, col), value in zip(equation.cells, values):
+            if not isinstance(value, str):  # If it's a number
+                self.grid[row][col]['value'] = value
+
+    def _hide_numbers(self, difficulty: str) -> List[int]:
+        """Hide some numbers and return them as number bank."""
+        number_bank = []
+        self.empty_cells.clear()
         
-        return True
+        for equation in self.equations:
+            # Determine which positions to hide (0=first number, 2=second number, 4=result)
+            hide_positions = self._get_positions_to_hide(equation, difficulty)
+            
+            # Hide numbers and add to number bank
+            for i, cell in enumerate(equation.cells):
+                row, col = cell
+                if i in hide_positions:
+                    value = self.grid[row][col]['value']
+                    if value is not None:  # Only add non-None values
+                        self.grid[row][col]['value'] = None
+                        self.grid[row][col]['isEmpty'] = True
+                        self.grid[row][col]['isFixed'] = False
+                        number_bank.append(value)
+                        self.empty_cells.add(cell)
+                elif not self.grid[row][col]['isOperator']:
+                    # Mark non-operator cells as fixed if they're not hidden
+                    self.grid[row][col]['isFixed'] = True
+                    self.grid[row][col]['isEmpty'] = False
+        
+        return sorted(number_bank)
+
+    def _get_positions_to_hide(self, equation: Equation, difficulty: str) -> List[int]:
+        """Determine which positions to hide based on difficulty."""
+        candidates = [0, 2, 4]  # Possible positions to hide (first number, second number, result)
+        
+        # For medium/hard, don't hide intersection points
+        if difficulty != 'easy':
+            candidates = [pos for pos in candidates 
+                        if equation.cells[pos] not in self.intersection_points]
+        
+        # Always hide exactly 2 positions per equation
+        # If we can't hide 2 positions (due to intersections), hide just 1
+        num_to_hide = min(2, len(candidates))
+        return random.sample(candidates, num_to_hide)
 
     def _get_equation_cells(self, position: Position, length: int) -> List[Tuple[int, int]]:
         """Get the cells that would be used by an equation."""
@@ -227,122 +391,77 @@ class PuzzleGenerator:
                 cells.append((position.row + i, position.col))
         return cells
 
-    def _place_equation(self, equation: Equation) -> bool:
-        """Place an equation in the grid."""
-        # Check if any cells are already used
-        for cell in equation.cells:
-            if cell in self.used_cells:
-                return False
-        
-        # Place the equation
-        cell_values = [equation.a, equation.operator, equation.b, '=', equation.result]
-        
-        # Determine which numbers to leave empty based on difficulty
-        empty_positions = self._get_empty_positions(equation.position.orientation)
-        
-        for i, ((row, col), value) in enumerate(zip(equation.cells, cell_values)):
-            self.used_cells.add((row, col))
-            is_operator = isinstance(value, str)
-            should_be_empty = not is_operator and i in empty_positions
+    def _is_valid_equation_position(self, cells: List[Tuple[int, int]]) -> bool:
+        """Check if an equation can be placed at the given position."""
+        # Check if all cells are within grid bounds
+        if not all(0 <= row < self.grid_size and 0 <= col < self.grid_size for row, col in cells):
+            return False
             
-            # Don't allow first position to be empty (to avoid operator at start)
-            if i == 0:
-                should_be_empty = False
+        # Check if any cell is already used by another equation
+        if any((row, col) in self._used_cells for row, col in cells):
+            return False
             
-            self.grid[row][col] = {
-                'value': None if should_be_empty else value,
-                'isOperator': is_operator,
-                'operator': value if is_operator else None,
-                'isResult': not is_operator and value == equation.result,
-                'isFixed': not should_be_empty,
-                'isEmpty': should_be_empty  # Add new flag for empty cells
-            }
+        # Check if there's enough space around the equation
+        for row, col in cells:
+            # Check adjacent cells (not including diagonals)
+            for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                adj_row, adj_col = row + dr, col + dc
+                if (0 <= adj_row < self.grid_size and 
+                    0 <= adj_col < self.grid_size and 
+                    (adj_row, adj_col) in self._used_cells):
+                    # Allow adjacent cells only for intersections at number positions
+                    if (row, col) not in cells:
+                        # Check if this is a potential intersection point
+                        if cells.index((row, col)) % 2 == 0:  # Number position
+                            continue
+                        return False
+        
         return True
 
-    def _get_empty_positions(self, orientation: str) -> List[int]:
-        """Determine which positions in the equation should be empty based on difficulty."""
-        difficulty = self._current_difficulty  # We'll need to add this as instance variable
-        
-        # Probability of leaving a number empty based on difficulty
-        empty_prob = {
-            'easy': 0.3,
-            'medium': 0.5,
-            'hard': 0.7
-        }.get(difficulty, 0.5)
-        
-        # Positions that can be empty (0 = first number, 2 = second number, 4 = result)
-        candidates = [0, 2, 4]
-        
-        # Always leave at least one number empty
-        min_empty = 1
-        max_empty = {
-            'easy': 1,
-            'medium': 2,
-            'hard': 3
-        }.get(difficulty, 1)
-        
-        # Randomly choose how many numbers to leave empty
-        num_empty = random.randint(min_empty, max_empty)
-        
-        # Randomly select positions to leave empty
-        return random.sample(candidates, num_empty)
+    def _used_operators(self) -> Set[str]:
+        """Return the set of used operators in the grid."""
+        used_operators = set()
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                if self.grid[row][col] and self.grid[row][col].get('isOperator', False):
+                    used_operators.add(self.grid[row][col]['operator'])
+        return used_operators
 
-    def _find_intersections(self, position: Position) -> List[Tuple[Tuple[int, int], int]]:
-        """Find intersection points with existing equations."""
-        intersections = []
-        cells = self._get_equation_cells(position, 5)
-        
-        for i, (row, col) in enumerate(cells):
-            if i % 2 == 1:  # Skip operator positions
-                continue
-            if (row, col) in self.cell_equations:
-                for eq in self.cell_equations[(row, col)]:
-                    cell_idx = eq.cells.index((row, col))
-                    if cell_idx == 0:
-                        value = eq.a
-                    elif cell_idx == 2:
-                        value = eq.b
-                    elif cell_idx == 4:
-                        value = eq.result
-                    else:
-                        continue
-                    intersections.append(((row, col), value))
-                    break
-        return intersections
+    def _used_numbers(self) -> Set[int]:
+        """Return the set of used numbers in the grid."""
+        used_numbers = set()
+        for row in range(self.grid_size):
+            for col in range(self.grid_size):
+                if self.grid[row][col] and not self.grid[row][col].get('isOperator', False):
+                    used_numbers.add(self.grid[row][col]['value'])
+        return used_numbers
 
-    def _validate_numbers_with_existing(self, position: Position, a: int, b: int, result: int) -> bool:
-        """Validate that new numbers work with existing equations at intersection points."""
-        cells = self._get_equation_cells(position, 5)
-        values = [a, None, b, None, result]
+    def _score_puzzle(self, equations_placed: int, intersections: int, difficulty: str) -> int:
+        """Score a puzzle based on its properties and difficulty."""
+        base_score = equations_placed * 10
         
-        for i, (row, col) in enumerate(cells):
-            if values[i] is None:  # Skip operator positions
-                continue
-            if (row, col) in self.cell_equations:
-                for eq in self.cell_equations[(row, col)]:
-                    cell_idx = eq.cells.index((row, col))
-                    if cell_idx % 2 == 0:  # Number position
-                        eq_value = [eq.a, eq.b, eq.result][cell_idx // 2]
-                        if eq_value != values[i]:
-                            return False
-        return True
+        if difficulty == 'easy':
+            # For easy, we just want 2 equations
+            if equations_placed >= 2:
+                base_score += 20
+        elif difficulty == 'medium':
+            # For medium, prefer 2 equations with at least 1 intersection
+            if equations_placed >= 2:
+                base_score += 20
+                if intersections > 0:
+                    base_score += 10
+        else:  # hard
+            # For hard, prefer 2+ equations with intersections
+            if equations_placed >= 2:
+                base_score += 20
+                base_score += intersections * 10
+        
+        return base_score
 
-    def _generate_number_bank(self) -> List[int]:
-        """Generate the number bank for the puzzle."""
-        number_bank = []
-        
-        # Go through each equation and add numbers for empty cells
-        for equation in self.equations:
-            # Check each position in the equation
-            for i, (row, col) in enumerate(equation.cells):
-                cell = self.grid[row][col]
-                if cell and cell.get('isEmpty', False):
-                    # Add the corresponding number based on position
-                    if i == 0:  # First number
-                        number_bank.append(equation.a)
-                    elif i == 2:  # Second number
-                        number_bank.append(equation.b)
-                    elif i == 4:  # Result
-                        number_bank.append(equation.result)
-        
-        return sorted(number_bank) 
+    def _get_minimum_score(self, difficulty: str) -> int:
+        """Get the minimum acceptable score for a difficulty level."""
+        return {
+            'easy': 20,    # Just need 2 equations
+            'medium': 35,  # 2 equations + 1 intersection
+            'hard': 50     # 2 equations + 2 intersections
+        }.get(difficulty, 20) 

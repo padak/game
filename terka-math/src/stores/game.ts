@@ -35,24 +35,30 @@ export const useGameStore = defineStore('game', {
 
   actions: {
     async initializeGame(difficulty: 'easy' | 'medium' | 'hard' = 'medium') {
+      console.log('Initializing game with difficulty:', difficulty)
       this.loading = true
       this.error = null
       try {
         const gameState = await apiService.startNewGame(difficulty)
+        console.log('Received game state in store:', gameState)
         this.updateGameState(gameState)
       } catch (error) {
+        console.error('Error initializing game in store:', error)
         this.error = error instanceof Error ? error.message : 'Failed to start game'
         console.error('Failed to initialize game:', error)
       } finally {
         this.loading = false
+        console.log('Game initialization complete. Grid:', this.grid)
       }
     },
 
     updateGameState(gameState: GameState) {
+      console.log('Updating game state with:', gameState)
       this.grid = gameState.grid
       this.availableNumbers = gameState.numberBank
       this.difficulty = gameState.difficulty
       this.gridSize = this.grid.length
+      console.log('State updated. Grid size:', this.gridSize)
     },
 
     selectNumber(num: number | null) {
