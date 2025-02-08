@@ -1,187 +1,99 @@
 import { defineStore } from 'pinia'
+import { apiService, type Cell, type GameState } from '@/services/api'
 
-export interface Cell {
-  value: number | null
-  isFixed: boolean
-  isOperator: boolean
-  operator?: '+' | '-' | '*' | '/' | '='
-  isResult: boolean
-  isCorrect?: boolean
-  isIncorrect?: boolean
-}
-
-export interface GameState {
+interface State {
   grid: Cell[][]
   availableNumbers: number[]
   selectedNumber: number | null
   difficulty: 'easy' | 'medium' | 'hard'
   gridSize: number
+  loading: boolean
+  error: string | null
 }
 
 export const useGameStore = defineStore('game', {
-  state: (): GameState => ({
+  state: (): State => ({
     grid: [],
     availableNumbers: [],
     selectedNumber: null,
     difficulty: 'medium',
-    gridSize: 8
+    gridSize: 8,
+    loading: true,
+    error: null
   }),
 
   getters: {
     isGameComplete: (state) => {
+      if (!state.grid || state.grid.length === 0) return false;
       return state.grid.every(row => 
         row.every(cell => 
-          cell.isFixed || cell.isOperator || cell.isCorrect || cell.value === null
+          cell?.isFixed || cell?.isOperator || cell?.isCorrect || cell?.value === null
         )
       )
     }
   },
 
   actions: {
-    validateEquations() {
-      // Reset all validation states
-      this.grid.forEach(row => 
-        row.forEach(cell => {
-          cell.isCorrect = false
-          cell.isIncorrect = false
-        })
-      )
-
-      // Validate horizontal equations
-      for (let row = 0; row < this.gridSize; row++) {
-        for (let col = 0; col < this.gridSize - 4; col++) {
-          const cells = this.grid[row].slice(col, col + 5)
-          if (this.isCompleteEquation(cells)) {
-            const isValid = this.isValidEquation(cells)
-            cells.forEach(cell => {
-              cell.isCorrect = isValid
-              cell.isIncorrect = !isValid
-            })
-          }
-        }
-      }
-
-      // Validate vertical equations
-      for (let col = 0; col < this.gridSize; col++) {
-        for (let row = 0; row < this.gridSize - 4; row++) {
-          const cells = Array(5).fill(null)
-            .map((_, i) => this.grid[row + i][col])
-          if (this.isCompleteEquation(cells)) {
-            const isValid = this.isValidEquation(cells)
-            cells.forEach(cell => {
-              cell.isCorrect = isValid
-              cell.isIncorrect = !isValid
-            })
-          }
-        }
+    async initializeGame(difficulty: 'easy' | 'medium' | 'hard' = 'medium') {
+      this.loading = true
+      this.error = null
+      try {
+        const gameState = await apiService.startNewGame(difficulty)
+        this.updateGameState(gameState)
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Failed to start game'
+        console.error('Failed to initialize game:', error)
+      } finally {
+        this.loading = false
       }
     },
 
-    isCompleteEquation(cells: Cell[]): boolean {
-      if (cells.length !== 5) return false
-      const [num1, op, num2, eq, result] = cells
-      return !!(num1?.value && op?.operator && num2?.value && eq?.operator === '=' && result?.value)
-    },
-
-    isValidEquation(cells: Cell[]): boolean {
-      if (cells.length !== 5) return false
-      
-      const [num1, op, num2, eq, result] = cells
-      if (!num1?.value || !num2?.value || !result?.value) return false
-      if (!op?.operator || op.operator === '=' || !eq?.operator || eq.operator !== '=') return false
-
-      switch (op.operator) {
-        case '+': return num1.value + num2.value === result.value
-        case '-': return num1.value - num2.value === result.value
-        case '*': return num1.value * num2.value === result.value
-        case '/': return num1.value / num2.value === result.value && Number.isInteger(num1.value / num2.value)
-        default: return false
-      }
-    },
-
-    initializeGame(difficulty: 'easy' | 'medium' | 'hard' = 'medium') {
-      this.difficulty = difficulty
-      this.gridSize = difficulty === 'easy' ? 6 : difficulty === 'medium' ? 8 : 10
-      
-      // Initialize empty grid
-      this.grid = Array(this.gridSize).fill(null).map(() => 
-        Array(this.gridSize).fill(null).map(() => ({
-          value: null,
-          isFixed: false,
-          isOperator: false,
-          isResult: false,
-          isCorrect: false
-        }))
-      )
-
-      // Horizontal equation: 2 + ? = 5
-      this.grid[1][1] = { value: 2, isFixed: true, isOperator: false, isResult: false }
-      this.grid[1][2] = { value: null, isFixed: false, isOperator: true, operator: '+', isResult: false }
-      this.grid[1][3] = { value: null, isFixed: false, isOperator: false, isResult: false } // Player needs to put 3 here
-      this.grid[1][4] = { value: null, isFixed: false, isOperator: true, operator: '=', isResult: false }
-      this.grid[1][5] = { value: 5, isFixed: true, isOperator: false, isResult: true }
-
-      // Vertical equation starting from the empty cell above: ? * 4 = ?
-      this.grid[2][3] = { value: null, isFixed: false, isOperator: true, operator: '*', isResult: false }
-      this.grid[3][3] = { value: 4, isFixed: true, isOperator: false, isResult: false }
-      this.grid[4][3] = { value: null, isFixed: false, isOperator: true, operator: '=', isResult: false }
-      this.grid[5][3] = { value: null, isFixed: false, isOperator: false, isResult: true } // Player needs to put 12 here
-
-      // Initialize available numbers (including numbers needed for both equations)
-      this.availableNumbers = [
-        1, 1,
-        2, 2,
-        3, 3,  // For horizontal equation (2 + 3 = 5)
-        4, 4,
-        5, 5,
-        6, 6,
-        7, 7,
-        8, 8,
-        9, 9,
-        12, 12  // For vertical equation (3 * 4 = 12)
-      ].sort((a, b) => a - b)
+    updateGameState(gameState: GameState) {
+      this.grid = gameState.grid
+      this.availableNumbers = gameState.numberBank
+      this.difficulty = gameState.difficulty
+      this.gridSize = this.grid.length
     },
 
     selectNumber(num: number | null) {
       this.selectedNumber = num
     },
 
-    placeNumber(row: number, col: number) {
-      if (this.selectedNumber === null || !this.grid[row]?.[col]) return
+    async placeNumber(row: number, col: number) {
+      if (this.selectedNumber === null) return
       
-      const cell = this.grid[row][col]
-      if (cell.isFixed || cell.isOperator) return
-
-      cell.value = this.selectedNumber
-      
-      // Remove the used number from available numbers
-      const index = this.availableNumbers.indexOf(this.selectedNumber)
-      if (index !== -1) {
-        this.availableNumbers.splice(index, 1)
+      this.loading = true
+      this.error = null
+      try {
+        const result = await apiService.validateMove(row, col, this.selectedNumber)
+        if (result.valid && result.grid && result.numberBank) {
+          this.grid = result.grid
+          this.availableNumbers = result.numberBank
+          this.selectedNumber = null
+        }
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Failed to place number'
+        console.error('Failed to place number:', error)
+      } finally {
+        this.loading = false
       }
-      
-      this.selectedNumber = null
-
-      // Validate equations after placing a number
-      this.validateEquations()
     },
 
-    clearCell(row: number, col: number) {
-      const cell = this.grid[row]?.[col]
-      if (!cell || cell.isFixed || cell.isOperator) return
-      
-      // Add the number back to available numbers if it was used
-      if (cell.value !== null) {
-        this.availableNumbers.push(cell.value)
-        // Sort numbers for better user experience
-        this.availableNumbers.sort((a, b) => a - b)
+    async clearCell(row: number, col: number) {
+      this.loading = true
+      this.error = null
+      try {
+        const result = await apiService.clearCell(row, col)
+        if (result.valid && result.grid && result.numberBank) {
+          this.grid = result.grid
+          this.availableNumbers = result.numberBank
+        }
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : 'Failed to clear cell'
+        console.error('Failed to clear cell:', error)
+      } finally {
+        this.loading = false
       }
-      
-      cell.value = null
-      cell.isCorrect = false
-      
-      // Revalidate equations after clearing a cell
-      this.validateEquations()
     }
   }
 }) 

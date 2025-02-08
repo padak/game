@@ -1,13 +1,13 @@
 <template>
   <div class="number-bank">
     <div 
-      v-for="(number, index) in gameStore.availableNumbers" 
-      :key="`${number}-${index}`"
+      v-for="num in gameStore.availableNumbers"
+      :key="num"
       class="number"
-      :class="{ 'selected': gameStore.selectedNumber === number }"
-      @click="handleNumberClick(number)"
+      :class="{ 'selected': gameStore.selectedNumber === num }"
+      @click="gameStore.selectNumber(num)"
     >
-      {{ number }}
+      {{ num }}
     </div>
   </div>
 </template>
@@ -16,14 +16,6 @@
 import { useGameStore } from '@/stores/game'
 
 const gameStore = useGameStore()
-
-const handleNumberClick = (number: number) => {
-  if (gameStore.selectedNumber === number) {
-    gameStore.selectNumber(null)
-  } else {
-    gameStore.selectNumber(number)
-  }
-}
 </script>
 
 <style scoped>
