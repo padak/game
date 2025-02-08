@@ -11,7 +11,8 @@
             'is-result': cell.isResult,
             'is-fixed': cell.isFixed,
             'is-empty': cell.value === null && !cell.isOperator,
-            'is-correct': cell.isCorrect
+            'is-correct': cell.isCorrect,
+            'is-incorrect': cell.isIncorrect
           }"
           @click="handleCellClick(rowIndex, colIndex)"
         >
@@ -108,5 +109,14 @@ const handleCellClick = (row: number, col: number) => {
 
 .cell.is-correct.is-operator {
   background: #c8e6c9;
+}
+
+.cell.is-incorrect {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.cell.is-incorrect.is-operator {
+  background: #ffcdd2;
 }
 </style> 

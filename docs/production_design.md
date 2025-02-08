@@ -5,15 +5,16 @@ This document outlines how to implement a **Math Crossword Game** that can be se
 1. **Supported Operations**: `+`, `-`, `*`, `/` (all integer results, no decimals, no negatives)  
 2. **Difficulty Levels**: Differ by number of pre‐filled cells and equation complexity  
 3. **Puzzle Generation**: Generated on‐the‐fly (randomly, no pre‐stored puzzles)  
-4. **User Interaction**: Drag‐and‐drop or click‐and‐place from a number bank into the crossword grid; immediate validation as soon as an equation is completed  
+4. **User Interaction**: Click-to-select from a number bank, then click-to-place into the crossword grid; immediate validation as soon as an equation is completed  
 5. **Validation**:  
    - Only `X op Y = Z` style (exactly two operands and one result)  
    - If an equation is incomplete, partial correctness can be marked (the placed number might be green if it still fits).  
    - Once an equation is fully populated, if it's correct, show it in green; otherwise red.  
+   - For interconnected equations, validate all affected equations when a shared cell is modified.
 6. **Completion**: When the entire puzzle is correctly filled, show a "Congratulations!" popup.  
 7. **No Scoreboard or Persistent State** (Version 1)  
 8. **Up to Two Players**: Both can join the same game and see each other's moves in real time (shared state).  
-9. **Technology**: Developer's choice, but a Node/Express backend plus a web‐based frontend is a simple approach.  
+9. **Technology**: Python/Flask backend plus Vue.js frontend for clean architecture and strong type support
 10. **Layout**: The crossword should not rearrange dynamically (no reflowing while playing). A basic responsive approach is fine so it can fit on a mobile screen, but no puzzle "re‐generation" or reshuffling.
 
 ---
@@ -23,11 +24,17 @@ This document outlines how to implement a **Math Crossword Game** that can be se
 1. **Server**  
    - Serves a single shared puzzle state for all clients (up to two players).  
    - Generates a crossword puzzle in memory whenever a new game is requested.
+   - Validates moves and maintains game state consistency.
 
 2. **Frontend**  
-   - Renders the crossword grid (a set of squares for numbers and operators).  
-   - Shows a "number bank" below (or side by side), from which players can pick or drag numbers.  
-   - Performs immediate arithmetic checks (or sends data to the server for validation).
+   - Renders the crossword grid with clear visual distinction between:
+     - Pre-filled numbers (non-interactive)
+     - Operators (+, -, *, /, =)
+     - Empty cells (interactive)
+     - Shared cells (part of multiple equations)
+   - Shows a "number bank" below with available numbers
+   - Performs immediate arithmetic validation
+   - Provides visual feedback for correct/incorrect equations
 
 3. **Communication**  
    - Option A: **Simple** – Each move is posted to the server; the server returns validation results and updates puzzle state. Each player polls the server or refreshes state periodically.  
@@ -51,253 +58,174 @@ Since the puzzle must be generated on‐the‐fly, you need an algorithm that:
    - No fractional results (so for division `A / B`, ensure `B` divides `A` evenly).  
    - Avoid negative outcomes.
 
-3. **Shared Cells for the Crossword**  
-   - Make sure the puzzle is shaped so that certain operand cells or result cells can be shared between two equations (like crossword intersections).  
-   - Example pattern (simplified):
+3. **Shared Cells and Equation Interconnection**  
+   - Equations can share cells to create crossword-style intersections
+   - When cells are shared:
+     - The number must satisfy both equations
+     - Validation must check all affected equations
+     - Visual feedback should reflect the state of all related equations
+   - Example patterns:
      ```
-     10 - x = 8
-          x + y = 15
-              y * 2 = 30
+     Horizontal: 2 + x = 5
+     Vertical:   x * 4 = 12
+     (where x = 3 satisfies both equations)
+     ```
+     ```
+     Horizontal: a + b = 10
+     Vertical:   b * 2 = 8
+     (where a = 6, b = 4 satisfies both equations)
      ```
 
-4. **Pre‐Fill Some Cells**  
-   - Depending on difficulty, fill in some of the numbers or results to guide the player.
+4. **Pre‐Fill Strategy**  
+   - Pre-fill cells strategically to guide solution
+   - Always include some fixed numbers to anchor equations
+   - Consider difficulty when deciding what to pre-fill:
+     - Easy: More pre-filled numbers, especially results
+     - Medium: Some pre-filled numbers, mix of operands and results
+     - Hard: Minimal pre-filled numbers, mainly operators
 
-5. **Generate the "Number Bank"**  
-   - Gather all the unique values that appear in the puzzle (operands, results).  
-   - Possibly add a few "decoy" numbers to make it trickier.  
-   - Shuffle them so the player can't immediately guess which belongs where.
+5. **Number Bank Generation**  
+   - Include all required numbers for valid solutions
+   - Add some decoy numbers for challenge
+   - Sort numbers for better user experience
+   - Support multiple instances of the same number if needed
+   - Remove numbers from bank when used
+   - Return numbers to bank when cells are cleared
 
 ### Example Pseudocode for Generating a Puzzle
 
 ```js
 function generatePuzzle(difficulty) {
-  const grid = createEmptyGrid();   // Some fixed or random dimension
+  const grid = createEmptyGrid();   // Fixed size (8x8 maximum)
   const equations = [];
+  const usedCells = new Set();
 
-  // 1. Decide how many equations for this difficulty
+  // 1. Decide equation count based on difficulty
   const eqCount = (difficulty === 'easy') ? 4 : (difficulty === 'hard') ? 8 : 6;
 
-  // 2. Fill equations
-  //    For each equation, pick random operators and integers with constraints.
-  //    Place them in the grid in a way that they can intersect.
-
+  // 2. Generate and place equations
   for (let i = 0; i < eqCount; i++) {
-    const operator = pickRandomOperator(); // +, -, *, or /
-    const [A, B, C] = generateValidTriple(operator);
-    equations.push({A, operator, B, C});
-    placeEquationInGrid(grid, A, operator, B, C);
+    const operator = pickRandomOperator();
+    const orientation = pickOrientation();
+    const position = findValidPosition(grid, orientation, usedCells);
+    
+    // Generate numbers ensuring shared cell consistency
+    const [A, B, C] = generateValidTriple(operator, position, grid);
+    
+    // Place equation in grid
+    placeEquation(grid, position, orientation, A, operator, B, C);
+    equations.push({ position, orientation, A, operator, B, C });
+    
+    // Mark used cells
+    markUsedCells(usedCells, position, orientation);
   }
 
-  // 3. Pre-fill some cells (depends on difficulty)
-  preFillSomeCells(grid, difficulty);
+  // 3. Pre-fill cells based on difficulty
+  preFillCells(grid, difficulty);
 
   // 4. Generate number bank
-  const allNums = collectAllNumbers(grid);
-  const decoys = generateDecoysIfNeeded();
-  const numberBank = shuffle([...allNums, ...decoys]);
+  const numberBank = generateNumberBank(grid, difficulty);
 
-  return {
-    grid,
-    equations,
-    numberBank
-  };
+  return { grid, equations, numberBank };
 }
 ```
-This algorithm can be as simple or complex as you need. For a small prototype, you could place equations linearly without complex intersections. For a more genuine "crossword" style, you'd incorporate logic to place them in crossing rows/columns.
 
 ## Data Model
 
-A common approach is to send/receive puzzle data as JSON. For example:
+The game state is managed using TypeScript interfaces:
 
-```json
-{
-  "grid": [
-    // Each cell could be { row: number, col: number, contentType: 'operand'|'operator'|'result'|'empty', value?: number|null, prefilled?: boolean }
-  ],
-  "numberBank": [ 2, 3, 5, 7, 14, ... ],
-  "equations": [
-    { "row": 0, "col": 0, "orientation": "horizontal", "A": 10, "operator": "-", "B": 2, "C": 8 },
-    ...
-  ]
+```typescript
+interface Cell {
+  value: number | null
+  isFixed: boolean
+  isOperator: boolean
+  operator?: '+' | '-' | '*' | '/' | '='
+  isResult: boolean
+  isCorrect?: boolean
+  isIncorrect?: boolean
+}
+
+interface GameState {
+  grid: Cell[][]
+  availableNumbers: number[]
+  selectedNumber: number | null
+  difficulty: 'easy' | 'medium' | 'hard'
+  gridSize: number
 }
 ```
-Frontend Implementation
-	1.	Grid Rendering
-	•	Use a table or CSS grid.
-	•	Mark pre-filled cells as read-only.
-	•	Mark empty cells as droppable or clickable placeholders.
-	2.	Number Bank
-	•	Show the list of available numbers.
-	•	The user either:
-	1.	Clicks a number in the bank, then clicks an empty cell to place it.
-	2.	Drags a number from the bank to the grid cell.
-	3.	Validation Flow
-	•	Immediate Check: When an operand or result cell is filled, check if that equation is fully populated:
-	•	If yes, compute A op B:
-	•	If C is correct, color them green.
-	•	Else, color the newly placed cell red (or color the entire equation red).
-	•	If partial, keep placeholders (the placed cell might remain neutral or green if it doesn't invalidate the partial equation).
-	4.	Two-Player Updates
-	•	Each time a player places a number, an update is sent to the server.
-	•	The server shares the updated puzzle state with all connected clients.
-	•	With basic polling, each player can poll every second or so, or on an event.
-	•	With WebSockets, you can push changes in real time.
-	5.	Completion
-	•	If all equations are correct, trigger a "Congratulations!" pop-up.
-	•	Possibly disable further interactions or provide a "New Game" button.
 
+## Frontend Implementation
 
-## Technology & Setup
+1. **Grid Component**
+   - Renders the game grid using CSS Grid
+   - Handles cell click events
+   - Shows validation state through CSS classes
+   - Supports mobile touch interactions
 
-Backend
-	•	**Python/Flask**:
-	•	Chosen for strong mathematical operations support and clean code structure
-	•	Route: GET /api/newGame?difficulty=easy|medium|hard
-	•	Generates a puzzle, stores it in memory with an ID, returns puzzle data
-	•	Route: POST /api/move
-	•	Receives a cell update from a client, validates or updates the puzzle state
-	•	Returns updated puzzle state or partial validation results
+2. **Number Bank Component**
+   - Displays available numbers
+   - Handles number selection
+   - Shows selected state
+   - Updates as numbers are used/returned
 
-Frontend
-	•	**Vue.js**:
-	•	Chosen for its balance of simplicity and power
-	•	Built-in reactivity system for game state management
-	•	Clean component structure for grid and number bank
-	•	Simple to set up and deploy
-	•	Mobile-optimized with limited grid size (similar to provided screenshot)
-	•	Click-to-select-then-click-to-place interaction model
+3. **Game Logic**
+   - Click-to-select-then-click-to-place interaction:
+     1. User clicks number in bank (highlights selection)
+     2. User clicks empty cell to place number
+     3. Number disappears from bank
+     4. Equations are validated
+   - Validation flow:
+     1. Check if equation is complete
+     2. Validate all affected equations
+     3. Update visual feedback
+     4. Check for game completion
 
-Implementation Approach
-	•	Phase 1: Single-player version
-		•	Focus on core game mechanics
-		•	Puzzle generation and validation
-		•	Mobile-friendly UI with fixed grid size
-	•	Phase 2 (Future): Multiplayer support
-		•	Add WebSocket connection
-		•	Implement real-time state synchronization
-		•	Add player presence indicators
+4. **Visual Feedback**
+   - Green: Correct equations
+   - Red: Incorrect equations
+   - Neutral: Incomplete equations
+   - Highlighted: Selected number
+   - Disabled: Fixed/operator cells
 
-## Grid Layout Strategy
+## Edge Cases & Validation Rules
 
-The game will use the simple layout approach:
-	•	Each equation (A op B = C) placed in separate rows/columns
-	•	Strategic overlaps to create crossword-style intersections
-	•	Fixed grid size optimized for mobile screens
-	•	No dynamic resizing or reflowing
-	•	Example dimensions based on screenshot: 8x8 grid maximum
+1. **Shared Cell Updates**
+   - When updating a shared cell:
+     1. Validate all equations containing the cell
+     2. Show appropriate feedback for each equation
+     3. Handle cases where a number satisfies one equation but not others
 
-## User Interface Implementation
+2. **Partial Equation Validation**
+   - For incomplete equations:
+     1. Check if current numbers could still form valid equation
+     2. Show neutral state if equation is still potentially valid
+     3. Show red if equation cannot be valid with current numbers
 
-1. **Grid Display**
-   - Fixed-size grid cells
-   - Clear visual distinction between:
-     - Pre-filled numbers (non-interactive)
-     - Operator cells (static)
-     - Empty cells (interactive)
-   - Mobile-optimized touch targets
+3. **Number Bank Management**
+   - Track multiple instances of same number
+   - Remove numbers when placed
+   - Return numbers when cells are cleared
+   - Sort numbers for consistency
 
-2. **Number Bank**
-   - Displayed below the grid
-   - Click-to-select interaction:
-     1. User clicks a number in the bank
-     2. Number becomes "selected" (visually highlighted)
-     3. User clicks an empty cell to place the number
-     4. If click is invalid, selection is cleared
-   - Clear visual feedback for selected state
+4. **Mobile Considerations**
+   - Touch-friendly hit areas
+   - Responsive grid sizing
+   - Clear visual feedback for touch interactions
 
-3. **Visual Feedback**
-   - Immediate color-coding for validation:
-     - Correct equations: Green
-     - Incorrect equations: Red
-     - Selected number: Highlighted state
-   - Touch-friendly hit areas for mobile users
+## Implementation Phases
 
-## Edge Cases & Notes
-	1.	Division By Zero: Exclude or handle carefully during puzzle generation.
-	2.	All Positive, Whole Numbers: Filter out negative or fractional results.
-	3.	Dragging to Wrong Spot: If the user drags a number that completely invalidates a partial equation, mark it red.
-	4.	Decoy Numbers: A few extra numbers in the bank can add challenge.
-	5.	No Dynamic Resizing: Keep the grid static once the puzzle is generated. Use a responsive design that scales to screen size without re-shaping the puzzle.
+1. **Phase 1: Single Player (Current)**
+   - Core game mechanics
+   - Equation validation
+   - Mobile-friendly UI
+   - Number bank management
 
-## Extended Summary
-
-Below is an expanded set of steps you can follow to finalize and deploy the Math Crossword Game. These steps build on the high-level overview but add a bit more detail to guide a smooth development process.
-
-1. **Generate a Random Puzzle**  
-   - **Step 1**: Decide on a crossword layout strategy:
-     - **Simple approach**: Place each equation (A op B = C) in a separate row or column with a few overlaps to create the "crossword" feel.
-     - **Complex approach**: Use a small backtracking algorithm to enforce more interwoven equations.  
-   - **Step 2**: For each equation:
-     1. Pick a random operator (`+`, `-`, `*`, `/`).  
-     2. Generate integer operands (A, B) that produce a valid result (C) with no negatives or decimals.  
-     3. Insert them into the grid, ensuring some cells overlap with existing equations if possible.  
-   - **Step 3**: Add or remove prefilled cells depending on the difficulty. For "Hard," keep them minimal; for "Easy," fill many values.
-
-2. **Pre-Fill Cells and Build the Number Bank**  
-   - Gather all the integer values (operands and results) in the puzzle.  
-   - Insert extra "decoy" numbers if desired for challenge.  
-   - Mark certain cells as "prefilled" (the user cannot change these).  
-   - Shuffle the final list of numbers to create the number bank.
-
-3. **Render the Puzzle**  
-   - Use a static, grid-based layout. Each cell has:
-     - A unique identifier (row/column).  
-     - An initial "read-only" or "empty" state.  
-   - Pre-filled cells show their numbers immediately.  
-   - Empty cells are placeholders that can accept a number from the bank.
-
-4. **User Interaction & Validation**  
-   - **Drag-and-Drop** or **Click-to-Select**:
-     1. User chooses (or drags) a number from the bank.  
-     2. User places it in an empty cell.  
-   - **Immediate Validation**:
-     - Check if all three parts of the related equation (`A op B = C`) are populated.  
-       - If so, evaluate the equation.  
-       - If correct, highlight it in green; if incorrect, highlight in red (or just highlight the incorrect cell in red).  
-     - If only one or two parts are filled, you can still mark a partially correct placement in green (e.g., `X + ? = 5` can remain valid if `X` is still potentially correct).
-
-5. **Completion Check**  
-   - After every placement:
-     - Evaluate all equations.  
-     - If every equation is correct, display a "Congratulations" popup.  
-   - Optionally provide a "Reset Puzzle" button or a "New Puzzle" button.
-
-6. **Two-Player Synchronization**  
-   - Either use a quick-poll approach (e.g., every 1-2 seconds the client asks the server for the latest puzzle state) **or** set up a WebSocket connection:
-     1. Each move is sent to the server.  
-     2. The server updates the shared puzzle state in memory.  
-     3. The server pushes the updated state to both players.  
-   - This ensures both players see each other's moves in near real time.
-
-7. **Deployment / Local Hosting**  
-   - **Backend**: A Node.js/Express or Python/Flask server that:
-     - Has an endpoint like `/api/newGame?difficulty=easy|medium|hard` to generate a puzzle.  
-     - Receives moves in `/api/move`.  
-     - Stores the puzzle in memory with some unique game ID.  
-   - **Frontend**: A simple HTML/JS or React/Vue app:
-     - Renders the grid and number bank.  
-     - Sends user actions to the server.  
-     - Listens for puzzle updates.  
-   - **Local Access**:  
-     - Run the server on your computer (`http://localhost:3000` for example).  
-     - Players on the same network can connect via `http://YOUR_LOCAL_IP:3000`.
-
-8. **Possible Enhancements**  
-   - **Scoring**: Add a timer or track incorrect attempts.  
-   - **Animations**: Animate the drag-and-drop or the coloring of cells.  
-   - **Hints**: Optionally allow a limited number of hints or partial reveals.  
-   - **Puzzle Variation**: Over time, add more complicated layouts or different puzzle sizes.
+2. **Phase 2: Multiplayer (Future)**
+   - Real-time state sync
+   - Player presence
+   - Move validation
+   - Shared game state
 
 ---
 
-## Putting It All Together
-
-By following these steps, you will have:
-
-1. A **randomly generated crossword** with valid integer arithmetic.  
-2. **Immediate feedback** for correct/incorrect cell entries.  
-3. **Two-player capability**, so both can collaborate (or compete) on the same puzzle.  
-4. A lightweight **local deployment** where the puzzle is accessible on your network without needing a production server.
-
-Feel free to experiment with how "crossword-like" you make the puzzle. Even a simpler layout (like a small table of equations) can be fun and rewarding while you fine-tune the logic. Once it's stable, you can expand to more intricate puzzle shapes and add additional features for an even richer game experience.
+This design document serves as the source of truth for implementation decisions and should be updated as the project evolves.

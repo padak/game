@@ -6,7 +6,8 @@ export interface Cell {
   isOperator: boolean
   operator?: '+' | '-' | '*' | '/' | '='
   isResult: boolean
-  isCorrect?: boolean  // New property to track if the cell is part of a correct equation
+  isCorrect?: boolean
+  isIncorrect?: boolean
 }
 
 export interface GameState {
@@ -38,12 +39,24 @@ export const useGameStore = defineStore('game', {
 
   actions: {
     validateEquations() {
+      // Reset all validation states
+      this.grid.forEach(row => 
+        row.forEach(cell => {
+          cell.isCorrect = false
+          cell.isIncorrect = false
+        })
+      )
+
       // Validate horizontal equations
       for (let row = 0; row < this.gridSize; row++) {
         for (let col = 0; col < this.gridSize - 4; col++) {
           const cells = this.grid[row].slice(col, col + 5)
-          if (this.isValidEquation(cells)) {
-            cells.forEach(cell => cell.isCorrect = true)
+          if (this.isCompleteEquation(cells)) {
+            const isValid = this.isValidEquation(cells)
+            cells.forEach(cell => {
+              cell.isCorrect = isValid
+              cell.isIncorrect = !isValid
+            })
           }
         }
       }
@@ -53,11 +66,21 @@ export const useGameStore = defineStore('game', {
         for (let row = 0; row < this.gridSize - 4; row++) {
           const cells = Array(5).fill(null)
             .map((_, i) => this.grid[row + i][col])
-          if (this.isValidEquation(cells)) {
-            cells.forEach(cell => cell.isCorrect = true)
+          if (this.isCompleteEquation(cells)) {
+            const isValid = this.isValidEquation(cells)
+            cells.forEach(cell => {
+              cell.isCorrect = isValid
+              cell.isIncorrect = !isValid
+            })
           }
         }
       }
+    },
+
+    isCompleteEquation(cells: Cell[]): boolean {
+      if (cells.length !== 5) return false
+      const [num1, op, num2, eq, result] = cells
+      return !!(num1?.value && op?.operator && num2?.value && eq?.operator === '=' && result?.value)
     },
 
     isValidEquation(cells: Cell[]): boolean {
